@@ -51,7 +51,15 @@ struct UserPluginQuotaPresentation: Equatable {
     }
 }
 
-private struct UserPluginMenuCardView: View {
+enum UserPluginMenuBadgeStyle {
+    static let size: CGFloat = 31
+    static let cornerRadius: CGFloat = 9
+    static let backgroundOpacity = 0.13
+    static let strokeOpacity = 0.32
+    static let strokeWidth: CGFloat = 1
+}
+
+struct UserPluginMenuCardView: View {
     let plugin: UserProviderPlugin
     let snapshot: UsageSnapshot?
     let error: String?
@@ -59,15 +67,28 @@ private struct UserPluginMenuCardView: View {
     let showUsed: Bool
     let width: CGFloat
     let onRefresh: () -> Void
+    @Environment(\.menuItemHighlighted) private var isHighlighted
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 8) {
                 Text(self.plugin.manifest.icon.monogram)
                     .font(.caption.bold())
-                    .foregroundStyle(.white)
-                    .frame(width: 26, height: 26)
-                    .background(self.tint, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .foregroundStyle(MenuHighlightStyle.primary(self.isHighlighted))
+                    .frame(width: UserPluginMenuBadgeStyle.size, height: UserPluginMenuBadgeStyle.size)
+                    .background(
+                        self.tint.opacity(UserPluginMenuBadgeStyle.backgroundOpacity),
+                        in: RoundedRectangle(
+                            cornerRadius: UserPluginMenuBadgeStyle.cornerRadius,
+                            style: .continuous))
+                    .overlay {
+                        RoundedRectangle(
+                            cornerRadius: UserPluginMenuBadgeStyle.cornerRadius,
+                            style: .continuous)
+                            .stroke(
+                                self.tint.opacity(UserPluginMenuBadgeStyle.strokeOpacity),
+                                lineWidth: UserPluginMenuBadgeStyle.strokeWidth)
+                    }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(self.plugin.manifest.name).font(.headline)
                     Text(self.plugin.fileURL.lastPathComponent)
@@ -100,7 +121,10 @@ private struct UserPluginMenuCardView: View {
                 }
                 if !snapshot.details.isEmpty {
                     Divider()
-                    ProviderDetailSectionsContent(sections: snapshot.details, chartColor: self.tint)
+                    ProviderDetailSectionsContent(
+                        sections: snapshot.details,
+                        chartColor: self.tint,
+                        layout: .pluginSummary)
                 }
                 if let identity = snapshot.identity(for: self.plugin.manifest.id) {
                     self.identity(identity)

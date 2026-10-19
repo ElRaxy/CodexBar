@@ -2,9 +2,25 @@ import CodexBarCore
 import SwiftUI
 
 struct ProviderDetailSectionsContent: View {
+    enum Layout {
+        case standard
+        case pluginSummary
+    }
+
     let sections: [ProviderDetailSection]
     let chartColor: Color
+    let layout: Layout
     @Environment(\.menuItemHighlighted) private var isHighlighted
+
+    init(
+        sections: [ProviderDetailSection],
+        chartColor: Color,
+        layout: Layout = .standard)
+    {
+        self.sections = sections
+        self.chartColor = chartColor
+        self.layout = layout
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -27,29 +43,48 @@ struct ProviderDetailSectionsContent: View {
                     .textCase(.uppercase)
                     .lineLimit(1)
             }
-            ForEach(Array(section.rows.enumerated()), id: \.offset) { _, row in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(row.label)
-                        .foregroundStyle(MenuHighlightStyle.secondary(self.isHighlighted))
-                    Spacer(minLength: 8)
-                    VStack(alignment: .trailing, spacing: 1) {
-                        Text(row.value)
-                            .foregroundStyle(MenuHighlightStyle.primary(self.isHighlighted))
-                            .fontWeight(.medium)
-                        if let secondaryValue = row.secondaryValue {
-                            Text(secondaryValue)
-                                .font(.caption2)
-                                .foregroundStyle(MenuHighlightStyle.secondary(self.isHighlighted))
+            if !section.rows.isEmpty {
+                switch self.layout {
+                case .standard:
+                    ForEach(Array(section.rows.enumerated()), id: \.offset) { _, row in
+                        self.row(row)
+                    }
+                case .pluginSummary:
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(section.rows.enumerated()), id: \.offset) { index, row in
+                            if index > 0 {
+                                Divider()
+                            }
+                            self.row(row)
+                                .padding(.vertical, 8)
                         }
                     }
                 }
-                .font(.caption)
-                .lineLimit(1)
             }
             if let chart = section.chart {
                 ProviderDetailChartContent(chart: chart, color: self.chartColor)
             }
         }
+    }
+
+    private func row(_ row: ProviderDetailSection.Row) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(row.label)
+                .foregroundStyle(MenuHighlightStyle.secondary(self.isHighlighted))
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(row.value)
+                    .foregroundStyle(MenuHighlightStyle.primary(self.isHighlighted))
+                    .fontWeight(.medium)
+                if let secondaryValue = row.secondaryValue {
+                    Text(secondaryValue)
+                        .font(.caption2)
+                        .foregroundStyle(MenuHighlightStyle.secondary(self.isHighlighted))
+                }
+            }
+        }
+        .font(.caption)
+        .lineLimit(1)
     }
 }
 

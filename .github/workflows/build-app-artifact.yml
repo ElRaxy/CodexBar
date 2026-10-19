@@ -1,0 +1,152 @@
+name: Build app artifact
+
+on:
+  push:
+    branches:
+      - "codex/**"
+    paths:
+      - "Sources/CodexBar/StatusItemController+UserPlugins.swift"
+      - "Sources/CodexBar/ProviderDetailSectionsContent.swift"
+      - "Tests/CodexBarTests/ProviderDetailSectionsContentTests.swift"
+      - "Tests/CodexBarTests/UserPluginMenuCardScreenshotRenderTests.swift"
+      - ".github/workflows/build-app-artifact.yml"
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: Architecture to package
+        required: true
+        default: arm64
+        type: choice
+        options:
+          - arm64
+          - universal
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-app-artifact-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-app:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Select Xcode 26.3 or 26.2
+        run: |
+          set -euo pipefail
+          # Both versions are part of the official macOS 26 runner image.
+          for candidate in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app; do
+            if [[ -d "$candidate" ]]; then
+              sudo xcode-select -s "${candidate}/Contents/Developer"
+              echo "DEVELOPER_DIR=${candidate}/Contents/Developer" >> "$GITHUB_ENV"
+              break
+            fi
+          done
+          [[ "$(/usr/bin/xcodebuild -version)" == Xcode\ 26.* ]]
+          /usr/bin/xcodebuild -version
+
+      - name: Resolve architecture
+        id: architecture
+        shell: bash
+        env:
+          REQUESTED_ARCHITECTURE: ${{ inputs.architecture || 'arm64' }}
+        run: |
+          set -euo pipefail
+          case "$REQUESTED_ARCHITECTURE" in
+            arm64) arches="arm64" ;;
+            universal) arches="arm64 x86_64" ;;
+            *)
+              echo "Unsupported architecture: $REQUESTED_ARCHITECTURE" >&2
+              exit 1
+              ;;
+          esac
+          echo "arches=$arches" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve Swift dependencies
+        run: swift package resolve
+
+      - name: R27-R29 test plugin card and render proof
+        id: proof
+        shell: bash
+        env:
+          CODEXBAR_SUPPRESS_TEST_KEYCHAIN_ACCESS: "1"
+        run: |
+          set -euo pipefail
+          proof_dir="${RUNNER_TEMP}/codexbar-plugin-card-proof"
+          mkdir -p "$proof_dir"
+          export CODEXBAR_PLUGIN_CARD_SCREENSHOT_DIR="$proof_dir"
+
+          swift test --filter ProviderDetailSectionsContentTests
+          swift test --filter UserPluginMenuCardScreenshotRenderTests
+
+          [[ -s "$proof_dir/token-monitor-plugin-card-light.png" ]]
+          [[ -s "$proof_dir/token-monitor-plugin-card-dark.png" ]]
+          [[ -s "$proof_dir/token-monitor-plugin-card-highlighted.png" ]]
+          echo "directory=$proof_dir" >> "$GITHUB_OUTPUT"
+
+      - name: R30 package CodexBar
+        env:
+          ARCHES: ${{ steps.architecture.outputs.arches }}
+          CODEXBAR_SIGNING: adhoc
+        run: ./Scripts/package_app.sh release
+
+      - name: R30 verify packaged app
+        shell: bash
+        env:
+          EXPECTED_ARCHES: ${{ steps.architecture.outputs.arches }}
+        run: |
+          set -euo pipefail
+          app="CodexBar.app"
+          plist="$app/Contents/Info.plist"
+
+          [[ -d "$app" ]]
+          [[ -f "$plist" ]]
+          plutil -lint "$plist"
+          codesign --verify --deep --strict --verbose=2 "$app"
+
+          feed_url="$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$plist")"
+          automatic_checks="$(/usr/libexec/PlistBuddy -c 'Print :SUEnableAutomaticChecks' "$plist")"
+          [[ -z "$feed_url" ]]
+          [[ "$automatic_checks" == "false" ]]
+
+          read -r -a expected_arches <<< "$EXPECTED_ARCHES"
+          for binary in \
+            "$app/Contents/MacOS/CodexBar" \
+            "$app/Contents/Helpers/CodexBarCLI" \
+            "$app/Contents/Helpers/CodexBarClaudeWatchdog"; do
+            [[ -x "$binary" ]]
+            actual_arches="$(lipo -archs "$binary")"
+            [[ "$(wc -w <<< "$actual_arches" | tr -d ' ')" -eq "${#expected_arches[@]}" ]]
+            for expected_arch in "${expected_arches[@]}"; do
+              tr ' ' '\n' <<< "$actual_arches" | grep -Fxq "$expected_arch"
+            done
+          done
+
+      - name: Compress app bundle
+        id: archive
+        shell: bash
+        env:
+          PROOF_DIRECTORY: ${{ steps.proof.outputs.directory }}
+          REQUESTED_ARCHITECTURE: ${{ inputs.architecture || 'arm64' }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/plugin-card-proof
+          archive="dist/CodexBar-${REQUESTED_ARCHITECTURE}.zip"
+          ditto -c -k --sequesterRsrc --keepParent CodexBar.app "$archive"
+          cp "$PROOF_DIRECTORY/token-monitor-plugin-card-light.png" dist/plugin-card-proof/
+          cp "$PROOF_DIRECTORY/token-monitor-plugin-card-dark.png" dist/plugin-card-proof/
+          cp "$PROOF_DIRECTORY/token-monitor-plugin-card-highlighted.png" dist/plugin-card-proof/
+          echo "path=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codexbar-app-${{ inputs.architecture || 'arm64' }}
+          path: |
+            ${{ steps.archive.outputs.path }}
+            dist/plugin-card-proof/*.png
+          if-no-files-found: error
